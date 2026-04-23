@@ -1,0 +1,9 @@
+services:
+  agent-proxy:
+    build: .
+    ports:
+      - "7700:7700"   # Web UI
+      - "7701:7701"   # Proxy listener
+    command: ["http", "--listen", "7701", "--target", "${AGENT_TARGET:-http://host.docker.internal:8080}"]
+    environment:
+      - AGENT_TARGET

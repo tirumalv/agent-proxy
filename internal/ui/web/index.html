@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>agent-proxy</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid #1e2330; background: #0d1020; }
+  header h1 { font-size: 1.1rem; font-weight: 600; letter-spacing: 0.02em; color: #7c9ef8; }
+  header .sub { font-size: 0.75rem; color: #4a5568; }
+  .controls { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+  .badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+  .live { background: #14532d; color: #4ade80; }
+  button { cursor: pointer; border: 1px solid #2d3748; background: #1a202c; color: #a0aec0; padding: 4px 12px; border-radius: 6px; font-size: 0.78rem; transition: background 0.15s; }
+  button:hover { background: #2d3748; color: #e2e8f0; }
+  .tabs { display: flex; gap: 4px; padding: 10px 20px; border-bottom: 1px solid #1e2330; background: #0d1020; }
+  .tab { padding: 5px 14px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: 1px solid transparent; color: #718096; transition: all 0.15s; }
+  .tab:hover { background: #1a202c; color: #e2e8f0; }
+  .tab.active { background: #1a2035; border-color: #2d4a8a; color: #7c9ef8; }
+  .count { font-size: 0.65rem; background: #2d3748; color: #718096; border-radius: 999px; padding: 1px 6px; margin-left: 4px; }
+  .tab.active .count { background: #2d4a8a; color: #93c5fd; }
+  #messages { padding: 12px 20px; display: flex; flex-direction: column; gap: 6px; }
+  .entry { border: 1px solid #1e2330; border-radius: 8px; background: #111827; overflow: hidden; }
+  .entry-header { display: flex; align-items: center; gap: 10px; padding: 8px 14px; cursor: pointer; user-select: none; }
+  .entry-header:hover { background: #1a202c; }
+  .dir { font-size: 0.7rem; font-weight: 700; padding: 2px 7px; border-radius: 4px; letter-spacing: 0.04em; }
+  .dir-request  { background: #1e3a5f; color: #60a5fa; }
+  .dir-response { background: #14532d; color: #4ade80; }
+  .dir-stdio-in  { background: #312e81; color: #a5b4fc; }
+  .dir-stdio-out { background: #451a03; color: #fb923c; }
+  .proto { font-size: 0.68rem; padding: 2px 7px; border-radius: 4px; font-weight: 600; }
+  .proto-mcp     { background: #1e3a5f; color: #93c5fd; }
+  .proto-mcp-sse { background: #0c2a4a; color: #67e8f9; }
+  .proto-a2a     { background: #3b1a5f; color: #c4b5fd; }
+  .proto-acp     { background: #1a3320; color: #6ee7b7; }
+  .proto-raw     { background: #2d2d2d; color: #9ca3af; }
+  .method { font-size: 0.8rem; font-weight: 600; color: #e2e8f0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .path { font-size: 0.72rem; color: #4a5568; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status { font-size: 0.72rem; font-weight: 600; }
+  .status-ok  { color: #4ade80; }
+  .status-err { color: #f87171; }
+  .latency { font-size: 0.68rem; color: #4a5568; white-space: nowrap; }
+  .ts { font-size: 0.68rem; color: #374151; white-space: nowrap; }
+  .copy-btn { font-size: 0.65rem; padding: 2px 7px; opacity: 0.6; }
+  .copy-btn:hover { opacity: 1; }
+  .body-wrap { display: none; padding: 0 14px 12px; }
+  .body-wrap.open { display: block; }
+  pre { background: #0a0e1a; border: 1px solid #1e2330; border-radius: 6px; padding: 10px 12px; font-size: 0.75rem; overflow-x: auto; line-height: 1.6; color: #d1d5db; white-space: pre-wrap; word-break: break-word; }
+  .empty { text-align: center; padding: 60px; color: #374151; font-size: 0.9rem; }
+  .empty span { display: block; font-size: 2rem; margin-bottom: 10px; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #0f1117; }
+  ::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>agent-proxy</h1>
+  <span class="sub">MCP · A2A · ACP inspector</span>
+  <div class="controls">
+    <span class="badge live" id="live-badge">● LIVE</span>
+    <button onclick="clearLog()">Clear</button>
+    <button onclick="togglePause()" id="pause-btn">Pause</button>
+  </div>
+</header>
+
+<div class="tabs">
+  <div class="tab active" data-proto="" onclick="setFilter('')">All <span class="count" id="cnt-all">0</span></div>
+  <div class="tab" data-proto="mcp" onclick="setFilter('mcp')">MCP <span class="count" id="cnt-mcp">0</span></div>
+  <div class="tab" data-proto="mcp-sse" onclick="setFilter('mcp-sse')">MCP SSE <span class="count" id="cnt-mcp-sse">0</span></div>
+  <div class="tab" data-proto="a2a" onclick="setFilter('a2a')">A2A <span class="count" id="cnt-a2a">0</span></div>
+  <div class="tab" data-proto="acp" onclick="setFilter('acp')">ACP <span class="count" id="cnt-acp">0</span></div>
+  <div class="tab" data-proto="raw" onclick="setFilter('raw')">Raw <span class="count" id="cnt-raw">0</span></div>
+</div>
+
+<div id="messages"><div class="empty"><span>📡</span>Waiting for messages…</div></div>
+
+<script>
+let currentFilter = '';
+let paused = false;
+let allMessages = [];
+let lastId = 0;
+
+function setFilter(proto) {
+  currentFilter = proto;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.proto === proto));
+  render();
+}
+
+function togglePause() {
+  paused = !paused;
+  document.getElementById('pause-btn').textContent = paused ? 'Resume' : 'Pause';
+  document.getElementById('live-badge').style.opacity = paused ? '0.3' : '1';
+}
+
+function clearLog() {
+  fetch('/api/messages', { method: 'DELETE' });
+  allMessages = [];
+  lastId = 0;
+  render();
+}
+
+function updateCounts(msgs) {
+  const counts = { '': msgs.length, mcp: 0, 'mcp-sse': 0, a2a: 0, acp: 0, raw: 0 };
+  msgs.forEach(m => { if (counts[m.protocol] !== undefined) counts[m.protocol]++; });
+  document.getElementById('cnt-all').textContent = counts[''];
+  document.getElementById('cnt-mcp').textContent = counts.mcp;
+  document.getElementById('cnt-mcp-sse').textContent = counts['mcp-sse'];
+  document.getElementById('cnt-a2a').textContent = counts.a2a;
+  document.getElementById('cnt-acp').textContent = counts.acp;
+  document.getElementById('cnt-raw').textContent = counts.raw;
+}
+
+function render() {
+  const filtered = currentFilter ? allMessages.filter(m => m.protocol === currentFilter) : allMessages;
+  updateCounts(allMessages);
+  const container = document.getElementById('messages');
+  if (!filtered.length) {
+    container.innerHTML = '<div class="empty"><span>📡</span>No messages yet for this filter…</div>';
+    return;
+  }
+  container.innerHTML = [...filtered].reverse().map(entry => {
+    const dirClass = 'dir-' + entry.direction;
+    const protoClass = 'proto-' + entry.protocol;
+    const dirLabel = { request: '→ REQ', response: '← RES', 'stdio-in': '→ IN', 'stdio-out': '← OUT' }[entry.direction] || entry.direction;
+    const ts = new Date(entry.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
+    const statusClass = entry.status_code >= 400 ? 'status-err' : 'status-ok';
+    const statusText = entry.status_code ? `<span class="status ${statusClass}">${entry.status_code}</span>` : '';
+    const latencyText = entry.latency_ms ? `<span class="latency">${entry.latency_ms}ms</span>` : '';
+    const bodyStr = JSON.stringify(entry.body, null, 2);
+    const id = 'e' + entry.id;
+    return `<div class="entry">
+      <div class="entry-header" onclick="toggleBody('${id}')">
+        <span class="dir ${dirClass}">${dirLabel}</span>
+        <span class="proto ${protoClass}">${entry.protocol}</span>
+        <span class="method">${entry.method || '—'}</span>
+        <span class="path">${entry.path || ''}</span>
+        ${statusText}
+        ${latencyText}
+        <span class="ts">${ts}</span>
+        <button class="copy-btn" onclick="event.stopPropagation();copyBody('${id}')">Copy</button>
+      </div>
+      <div class="body-wrap" id="${id}">
+        <pre>${syntaxHL(bodyStr)}</pre>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleBody(id) {
+  const el = document.getElementById(id);
+  el.classList.toggle('open');
+}
+
+function copyBody(id) {
+  const pre = document.querySelector(`#${id} pre`);
+  if (pre) navigator.clipboard.writeText(pre.innerText);
+}
+
+function syntaxHL(json) {
+  return json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, match => {
+      let cls = 'color:#f6ad55'; // number
+      if (/^"/.test(match)) {
+        cls = /:$/.test(match) ? 'color:#93c5fd' : 'color:#86efac';
+      } else if (/true|false/.test(match)) {
+        cls = 'color:#f472b6';
+      } else if (/null/.test(match)) {
+        cls = 'color:#9ca3af';
+      }
+      return `<span style="${cls}">${match}</span>`;
+    });
+}
+
+async function poll() {
+  if (paused) return;
+  try {
+    const url = '/api/messages?limit=500' + (currentFilter ? '&protocol=' + currentFilter : '');
+    const resp = await fetch('/api/messages?limit=500');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data && data.length !== allMessages.length) {
+      allMessages = data || [];
+      render();
+    }
+  } catch (e) { /* server not ready */ }
+}
+
+setInterval(poll, 2000);
+poll();
+</script>
+</body>
+</html>

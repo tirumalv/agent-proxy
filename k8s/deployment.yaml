@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-agent
+  labels:
+    app: my-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-agent
+  template:
+    metadata:
+      labels:
+        app: my-agent
+    spec:
+      containers:
+        # Your existing agent container
+        - name: agent
+          image: your-agent:latest
+          ports:
+            - containerPort: 8080
+
+        # agent-proxy sidecar — intercepts traffic on :7701, forwards to agent on :8080
+        - name: agent-proxy
+          image: ghcr.io/agentproxy/agent-proxy:latest
+          args:
+            - http
+            - --listen
+            - "7701"
+            - --target
+            - "http://localhost:8080"
+            - --ui-port
+            - "7700"
+          ports:
+            - name: ui
+              containerPort: 7700
+            - name: proxy
+              containerPort: 7701
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
