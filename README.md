@@ -61,11 +61,42 @@ AGENT_TARGET=http://my-agent:8080 docker compose up
 See [`k8s/deployment.yaml`](k8s/deployment.yaml) for a ready-to-use sidecar pattern.  
 Traffic routed to `:7701` is forwarded to your agent on `:8080`; UI is exposed on `:7700`.
 
+## OpenTelemetry Export
+
+agent-proxy can export every captured message as an OTEL span to any OTLP-compatible backend:
+
+```bash
+# Langfuse (via OTEL ingest endpoint)
+agent-proxy http --target http://localhost:8080 \
+  --otel-endpoint https://cloud.langfuse.com/api/public/otel
+
+# Jaeger (local)
+agent-proxy http --target http://localhost:8080 \
+  --otel-endpoint http://localhost:4318
+
+# Grafana Tempo / Datadog / Honeycomb — same flag, different URL
+```
+
+Each intercepted request/response pair becomes an OTEL span with these attributes:
+
+| Attribute | Example |
+|---|---|
+| `agent.protocol` | `mcp`, `a2a`, `acp`, `mcp-sse` |
+| `agent.direction` | `request`, `response`, `stdio-in`, `stdio-out` |
+| `agent.method` | `tools/call`, `initialize` |
+| `agent.path` | `/a2a/tasks/send` |
+| `agent.latency_ms` | `42` |
+| `agent.body` | JSON payload (truncated at 4096 chars) |
+| `http.response.status_code` | `200` |
+| `mcp.method` | `tools/call` (MCP only) |
+
+> The `--otel-endpoint` flag is optional. Without it, agent-proxy runs in local-only mode with the web UI only.
+
 ## CLI Reference
 
 ```
-agent-proxy http  --listen <port> --target <url> [--ui-port <port>]
-agent-proxy stdio --cmd "<command>"               [--ui-port <port>]
+agent-proxy http  --listen <port> --target <url> [--ui-port <port>] [--otel-endpoint <url>]
+agent-proxy stdio --cmd "<command>"               [--ui-port <port>] [--otel-endpoint <url>]
 ```
 
 | Flag | Default | Description |
@@ -74,6 +105,7 @@ agent-proxy stdio --cmd "<command>"               [--ui-port <port>]
 | `--target` | — | Upstream agent URL (HTTP mode, required) |
 | `--cmd` | — | Command to run as MCP server (stdio mode, required) |
 | `--ui-port` | 7700 | Port for web UI and `/api/messages` REST endpoint |
+| `--otel-endpoint` | — | OTLP HTTP endpoint for trace export (optional) |
 
 ## REST API
 

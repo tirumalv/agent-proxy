@@ -38,6 +38,9 @@ type Logger struct {
 	mu      sync.RWMutex
 	buf     *ring.Ring
 	counter uint64
+	// OnAdd is an optional hook called after each entry is stored.
+	// Used to emit OTEL spans without creating an import cycle.
+	OnAdd func(Entry)
 }
 
 func New() *Logger {
@@ -46,11 +49,16 @@ func New() *Logger {
 
 func (l *Logger) Add(e Entry) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.counter++
 	e.ID = l.counter
 	l.buf.Value = e
 	l.buf = l.buf.Next()
+	hook := l.OnAdd
+	l.mu.Unlock()
+
+	if hook != nil {
+		hook(e)
+	}
 }
 
 func (l *Logger) Get(proto string, limit int) []Entry {

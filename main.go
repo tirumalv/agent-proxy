@@ -12,11 +12,15 @@ import (
 
 	"github.com/agentproxy/agent-proxy/internal/logger"
 	"github.com/agentproxy/agent-proxy/internal/proxy"
+	"github.com/agentproxy/agent-proxy/internal/telemetry"
 	"github.com/agentproxy/agent-proxy/internal/ui"
 	"github.com/spf13/cobra"
 )
 
-var uiPort int
+var (
+	uiPort      int
+	otelEndpoint string
+)
 
 func main() {
 	root := &cobra.Command{
@@ -24,6 +28,7 @@ func main() {
 		Short: "Lightweight debugging proxy for MCP, A2A, and ACP protocols",
 	}
 	root.PersistentFlags().IntVar(&uiPort, "ui-port", 7700, "Port for the web UI and API")
+	root.PersistentFlags().StringVar(&otelEndpoint, "otel-endpoint", "", "OTLP HTTP endpoint to export traces (e.g. http://localhost:4318)")
 
 	root.AddCommand(httpCmd(), stdioCmd())
 
@@ -33,16 +38,33 @@ func main() {
 	}
 }
 
+// setupTelemetry initialises OTEL and wires RecordSpan onto the logger.
+func setupTelemetry(ctx context.Context, l *logger.Logger) func(context.Context) error {
+	shutdown, err := telemetry.Setup(ctx, otelEndpoint)
+	if err != nil {
+		log.Printf("OTEL setup failed: %v — continuing without traces", err)
+		return func(context.Context) error { return nil }
+	}
+	if otelEndpoint != "" {
+		log.Printf("OTEL traces → %s", otelEndpoint)
+		l.OnAdd = telemetry.RecordSpan
+	}
+	return shutdown
+}
+
 func httpCmd() *cobra.Command {
 	var listenPort int
 	var targetURL string
 
 	cmd := &cobra.Command{
-		Use:   "http",
-		Short: "HTTP reverse proxy mode (MCP HTTP/SSE, A2A, ACP)",
+		Use:     "http",
+		Short:   "HTTP reverse proxy mode (MCP HTTP/SSE, A2A, ACP)",
 		Example: `  agent-proxy http --listen 7701 --target http://localhost:8080`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
 			l := logger.New()
+			shutdown := setupTelemetry(ctx, l)
+			defer shutdown(ctx)
 
 			p, err := proxy.NewHTTP(targetURL, l)
 			if err != nil {
@@ -89,11 +111,14 @@ func stdioCmd() *cobra.Command {
 	var cmdLine string
 
 	cmd := &cobra.Command{
-		Use:   "stdio",
-		Short: "Stdio intercept mode (MCP stdio transport)",
+		Use:     "stdio",
+		Short:   "Stdio intercept mode (MCP stdio transport)",
 		Example: `  agent-proxy stdio --cmd "python weather_server.py"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
 			l := logger.New()
+			shutdown := setupTelemetry(ctx, l)
+			defer shutdown(ctx)
 
 			uiAddr := fmt.Sprintf(":%d", uiPort)
 			uiMux := http.NewServeMux()
