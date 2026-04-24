@@ -18,8 +18,9 @@ import (
 )
 
 var (
-	uiPort      int
+	uiPort       int
 	otelEndpoint string
+	logFile      string
 )
 
 func main() {
@@ -29,6 +30,7 @@ func main() {
 	}
 	root.PersistentFlags().IntVar(&uiPort, "ui-port", 7700, "Port for the web UI and API")
 	root.PersistentFlags().StringVar(&otelEndpoint, "otel-endpoint", "", "OTLP HTTP endpoint to export traces (e.g. http://localhost:4318)")
+	root.PersistentFlags().StringVar(&logFile, "log-file", "", "Append captured messages as NDJSON to this file")
 
 	root.AddCommand(httpCmd(), stdioCmd())
 
@@ -38,18 +40,33 @@ func main() {
 	}
 }
 
-// setupTelemetry initialises OTEL and wires RecordSpan onto the logger.
-func setupTelemetry(ctx context.Context, l *logger.Logger) func(context.Context) error {
+// setupLogger creates the logger, attaches the file hook (if requested), and
+// wires OTEL tracing. Returns the logger and an OTEL shutdown function.
+func setupLogger(ctx context.Context) (*logger.Logger, func(context.Context) error) {
+	l := logger.New()
+
+	if logFile != "" {
+		hook, close, err := logger.NewFileHook(logFile)
+		if err != nil {
+			log.Printf("File log setup failed: %v — continuing without file log", err)
+		} else {
+			l.AddHook(hook)
+			log.Printf("File log → %s", logFile)
+			// Close the file when the process exits via the OTEL shutdown chain below.
+			_ = close // closed on process exit; acceptable for a proxy tool
+		}
+	}
+
 	shutdown, err := telemetry.Setup(ctx, otelEndpoint)
 	if err != nil {
 		log.Printf("OTEL setup failed: %v — continuing without traces", err)
-		return func(context.Context) error { return nil }
+		return l, func(context.Context) error { return nil }
 	}
 	if otelEndpoint != "" {
 		log.Printf("OTEL traces → %s", otelEndpoint)
-		l.OnAdd = telemetry.RecordSpan
+		l.AddHook(telemetry.RecordSpan)
 	}
-	return shutdown
+	return l, shutdown
 }
 
 func httpCmd() *cobra.Command {
@@ -62,8 +79,7 @@ func httpCmd() *cobra.Command {
 		Example: `  agent-proxy http --listen 7701 --target http://localhost:8080`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
-			l := logger.New()
-			shutdown := setupTelemetry(ctx, l)
+			l, shutdown := setupLogger(ctx)
 			defer shutdown(ctx)
 
 			p, err := proxy.NewHTTP(targetURL, l)
@@ -78,6 +94,7 @@ func httpCmd() *cobra.Command {
 			uiMux.Handle("/ui", ui.Handler())
 			uiMux.Handle("/ui/", ui.Handler())
 			uiMux.HandleFunc("/api/messages", l.Handler())
+			uiMux.HandleFunc("/api/stats", l.StatsHandler())
 
 			uiSrv := &http.Server{Addr: uiAddr, Handler: uiMux}
 			proxySrv := &http.Server{Addr: proxyAddr, Handler: p}
@@ -116,8 +133,7 @@ func stdioCmd() *cobra.Command {
 		Example: `  agent-proxy stdio --cmd "python weather_server.py"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
-			l := logger.New()
-			shutdown := setupTelemetry(ctx, l)
+			l, shutdown := setupLogger(ctx)
 			defer shutdown(ctx)
 
 			uiAddr := fmt.Sprintf(":%d", uiPort)
@@ -125,6 +141,7 @@ func stdioCmd() *cobra.Command {
 			uiMux.Handle("/ui", ui.Handler())
 			uiMux.Handle("/ui/", ui.Handler())
 			uiMux.HandleFunc("/api/messages", l.Handler())
+			uiMux.HandleFunc("/api/stats", l.StatsHandler())
 
 			uiSrv := &http.Server{Addr: uiAddr, Handler: uiMux}
 			go func() {

@@ -179,7 +179,7 @@ async function poll() {
   if (paused) return;
   try {
     const url = '/api/messages?limit=500' + (currentFilter ? '&protocol=' + currentFilter : '');
-    const resp = await fetch('/api/messages?limit=500');
+    const resp = await fetch(url);
     if (!resp.ok) return;
     const data = await resp.json();
     if (data && data.length !== allMessages.length) {

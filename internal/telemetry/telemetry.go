@@ -19,6 +19,9 @@ import (
 
 const tracerName = "agent-proxy"
 
+// tracingEnabled is set to true once a real OTLP provider is registered.
+var tracingEnabled bool
+
 // Setup initialises the OTEL tracer provider with an OTLP HTTP exporter.
 // Returns a shutdown function that must be called on exit.
 // If endpoint is empty, Setup is a no-op and returns a nil shutdown func.
@@ -47,6 +50,7 @@ func Setup(ctx context.Context, endpoint string) (shutdown func(context.Context)
 		sdktrace.WithResource(res),
 	)
 	otel.SetTracerProvider(tp)
+	tracingEnabled = true
 	return tp.Shutdown, nil
 }
 
@@ -54,8 +58,9 @@ func Setup(ctx context.Context, endpoint string) (shutdown func(context.Context)
 // Protocol is mapped to span attributes following OpenTelemetry semantic conventions
 // where applicable, with agent-proxy-specific attributes for protocol details.
 func RecordSpan(entry logger.Entry) {
-	if otel.GetTracerProvider() == otel.GetTracerProvider() {
-		// Only emit if a real provider is registered (not the no-op default).
+	// Skip if Setup was not called with a real endpoint.
+	if !tracingEnabled {
+		return
 	}
 
 	tracer := otel.Tracer(tracerName)
