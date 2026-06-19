@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agentproxy/agent-proxy/internal/approval"
 	"github.com/agentproxy/agent-proxy/internal/logger"
 	"github.com/agentproxy/agent-proxy/internal/proxy"
 	"github.com/agentproxy/agent-proxy/internal/telemetry"
@@ -72,6 +73,8 @@ func setupLogger(ctx context.Context) (*logger.Logger, func(context.Context) err
 func httpCmd() *cobra.Command {
 	var listenPort int
 	var targetURL string
+	var requireApproval bool
+	var approvalTimeout time.Duration
 
 	cmd := &cobra.Command{
 		Use:     "http",
@@ -82,7 +85,9 @@ func httpCmd() *cobra.Command {
 			l, shutdown := setupLogger(ctx)
 			defer shutdown(ctx)
 
-			p, err := proxy.NewHTTP(targetURL, l)
+			gate := approval.New(requireApproval, approvalTimeout, approval.DefaultPolicy)
+
+			p, err := proxy.NewHTTP(targetURL, l, gate)
 			if err != nil {
 				return err
 			}
@@ -95,6 +100,8 @@ func httpCmd() *cobra.Command {
 			uiMux.Handle("/ui/", ui.Handler())
 			uiMux.HandleFunc("/api/messages", l.Handler())
 			uiMux.HandleFunc("/api/stats", l.StatsHandler())
+			uiMux.HandleFunc("/api/pending", gate.PendingHandler())
+			uiMux.HandleFunc("/api/decide", gate.DecideHandler())
 
 			uiSrv := &http.Server{Addr: uiAddr, Handler: uiMux}
 			proxySrv := &http.Server{Addr: proxyAddr, Handler: p}
@@ -107,6 +114,9 @@ func httpCmd() *cobra.Command {
 			}()
 
 			log.Printf("Proxy listening on %s → %s", proxyAddr, targetURL)
+			if requireApproval {
+				log.Printf("Human-in-the-loop ENABLED (timeout %s) — review at http://localhost%s/ui", approvalTimeout, uiAddr)
+			}
 			go func() {
 				if err := proxySrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 					log.Fatalf("Proxy server error: %v", err)
@@ -120,6 +130,8 @@ func httpCmd() *cobra.Command {
 
 	cmd.Flags().IntVar(&listenPort, "listen", 7701, "Port to listen on for proxied traffic")
 	cmd.Flags().StringVar(&targetURL, "target", "", "Upstream target URL (required)")
+	cmd.Flags().BoolVar(&requireApproval, "require-approval", false, "Pause consequential messages (MCP tools/call, A2A/ACP submissions) for human approval in the UI")
+	cmd.Flags().DurationVar(&approvalTimeout, "approval-timeout", 2*time.Minute, "How long a paused message waits for a decision before it is auto-rejected")
 	cmd.MarkFlagRequired("target")
 	return cmd
 }

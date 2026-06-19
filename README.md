@@ -92,10 +92,32 @@ Each intercepted request/response pair becomes an OTEL span with these attribute
 
 > The `--otel-endpoint` flag is optional. Without it, agent-proxy runs in local-only mode with the web UI only.
 
+## Human-in-the-Loop
+
+Run the HTTP proxy with `--require-approval` to **pause consequential messages** and require a human to approve, edit, or reject them in the web UI before they reach the agent:
+
+```bash
+agent-proxy http --target http://localhost:8080 --require-approval
+```
+
+By default only the actions that *do* something are gated — MCP `tools/call` and A2A/ACP submissions (POST). Discovery and status-poll traffic (`initialize`, `tools/list`, GET polls) flows through untouched, so the proxy stays transparent.
+
+A paused message appears at the top of `http://localhost:7700/ui` with three choices:
+
+| Action | Effect |
+|---|---|
+| **Approve** | Forward the message upstream unchanged |
+| **Edit** | Modify the JSON payload (e.g. tweak tool arguments), then forward |
+| **Reject** | Block the message; the caller receives `403 Forbidden` |
+
+If no decision is made within `--approval-timeout` (default `2m`), the message is auto-rejected (fail-closed).
+
+> Human-in-the-loop currently applies to HTTP mode.
+
 ## CLI Reference
 
 ```
-agent-proxy http  --listen <port> --target <url> [--ui-port <port>] [--otel-endpoint <url>]
+agent-proxy http  --listen <port> --target <url> [--ui-port <port>] [--otel-endpoint <url>] [--require-approval] [--approval-timeout <dur>]
 agent-proxy stdio --cmd "<command>"               [--ui-port <port>] [--otel-endpoint <url>]
 ```
 
@@ -106,6 +128,8 @@ agent-proxy stdio --cmd "<command>"               [--ui-port <port>] [--otel-end
 | `--cmd` | — | Command to run as MCP server (stdio mode, required) |
 | `--ui-port` | 7700 | Port for web UI and `/api/messages` REST endpoint |
 | `--otel-endpoint` | — | OTLP HTTP endpoint for trace export (optional) |
+| `--require-approval` | false | Pause consequential messages for human approval (HTTP mode) |
+| `--approval-timeout` | 2m | How long a paused message waits before it is auto-rejected |
 
 ## REST API
 
@@ -113,6 +137,8 @@ agent-proxy stdio --cmd "<command>"               [--ui-port <port>] [--otel-end
 |---|---|---|
 | `/api/messages` | GET | Fetch captured messages. Query: `?protocol=mcp&limit=50` |
 | `/api/messages` | DELETE | Clear the message log |
+| `/api/pending` | GET | List messages awaiting human approval |
+| `/api/decide` | POST | Resolve a paused message: `{ "id": 1, "action": "approve\|reject\|edit", "body": "…" }` |
 | `/ui` | GET | Web inspector UI |
 
 ## Web UI
