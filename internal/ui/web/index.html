@@ -50,6 +50,22 @@
   pre { background: #0a0e1a; border: 1px solid #1e2330; border-radius: 6px; padding: 10px 12px; font-size: 0.75rem; overflow-x: auto; line-height: 1.6; color: #d1d5db; white-space: pre-wrap; word-break: break-word; }
   .empty { text-align: center; padding: 60px; color: #374151; font-size: 0.9rem; }
   .empty span { display: block; font-size: 2rem; margin-bottom: 10px; }
+  /* human-in-the-loop approval panel */
+  #approvals { display: flex; flex-direction: column; gap: 10px; }
+  #approvals:not(:empty) { padding: 14px 20px 2px; }
+  .appr { border: 1px solid #7c5e10; background: #1a1505; border-radius: 8px; padding: 12px 14px; }
+  .appr-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .appr-title { font-size: 0.85rem; font-weight: 700; color: #fbbf24; }
+  .appr-meta { font-size: 0.7rem; color: #a98a3c; margin-left: auto; }
+  .appr pre { margin: 0; }
+  .appr textarea { width: 100%; min-height: 130px; resize: vertical; background: #0a0e1a; border: 1px solid #2a2410; border-radius: 6px; color: #e2e8f0; font-family: ui-monospace, 'Cascadia Code', monospace; font-size: 0.75rem; line-height: 1.6; padding: 10px 12px; }
+  .appr-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .btn-approve { border-color: #14532d; color: #4ade80; }
+  .btn-approve:hover { background: #14532d; color: #bbf7d0; }
+  .btn-reject { border-color: #7f1d1d; color: #f87171; }
+  .btn-reject:hover { background: #7f1d1d; color: #fecaca; }
+  .btn-edit { border-color: #1e3a5f; color: #60a5fa; }
+  .btn-edit:hover { background: #1e3a5f; color: #bfdbfe; }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: #0f1117; }
   ::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 3px; }
@@ -75,6 +91,8 @@
   <div class="tab" data-proto="acp" onclick="setFilter('acp')">ACP <span class="count" id="cnt-acp">0</span></div>
   <div class="tab" data-proto="raw" onclick="setFilter('raw')">Raw <span class="count" id="cnt-raw">0</span></div>
 </div>
+
+<div id="approvals"></div>
 
 <div id="messages"><div class="empty"><span>📡</span>Waiting for messages…</div></div>
 
@@ -188,6 +206,75 @@ async function poll() {
     }
   } catch (e) { /* server not ready */ }
 }
+
+// ---- human-in-the-loop approvals ----
+let editing = {};        // id -> in-progress edited text
+let lastPending = [];
+
+async function pollPending() {
+  if (Object.keys(editing).length) return; // don't clobber an in-progress edit
+  try {
+    const resp = await fetch('/api/pending');
+    if (!resp.ok) return;
+    lastPending = (await resp.json()) || [];
+    renderApprovals(lastPending);
+  } catch (e) { /* gate disabled or server not ready */ }
+}
+
+function renderApprovals(items) {
+  const c = document.getElementById('approvals');
+  if (!items.length) { c.innerHTML = ''; return; }
+  c.innerHTML = items.map(it => {
+    const bodyStr = JSON.stringify(it.body, null, 2);
+    const isEditing = editing[it.id] !== undefined;
+    const block = isEditing
+      ? `<textarea oninput="editing[${it.id}]=this.value">${escapeHtml(editing[it.id])}</textarea>`
+      : `<pre>${syntaxHL(bodyStr)}</pre>`;
+    const actions = isEditing
+      ? `<button class="btn-approve" onclick="saveEdit(${it.id})">Forward edited</button>
+         <button onclick="cancelEdit(${it.id})">Cancel</button>`
+      : `<button class="btn-approve" onclick="decide(${it.id},'approve')">Approve</button>
+         <button class="btn-reject" onclick="decide(${it.id},'reject')">Reject</button>
+         <button class="btn-edit" onclick="startEdit(${it.id})">Edit</button>`;
+    return `<div class="appr">
+      <div class="appr-head">
+        <span class="proto proto-${it.protocol}">${it.protocol}</span>
+        <span class="appr-title">${it.method || '—'}</span>
+        <span class="appr-meta">${it.path || ''} · awaiting human approval</span>
+      </div>
+      ${block}
+      <div class="appr-actions">${actions}</div>
+    </div>`;
+  }).join('');
+}
+
+function startEdit(id) {
+  const it = lastPending.find(p => p.id === id);
+  editing[id] = it ? JSON.stringify(it.body, null, 2) : '';
+  renderApprovals(lastPending);
+}
+function cancelEdit(id) { delete editing[id]; renderApprovals(lastPending); }
+function saveEdit(id) { decide(id, 'edit', editing[id]); }
+
+async function decide(id, action, body) {
+  try {
+    await fetch('/api/decide', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, action, body: body || '' }),
+    });
+  } catch (e) { /* ignore */ }
+  delete editing[id];
+  pollPending();
+  poll(); // refresh the message log — the forwarded/blocked result lands there
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+setInterval(pollPending, 1500);
+pollPending();
 
 setInterval(poll, 2000);
 poll();

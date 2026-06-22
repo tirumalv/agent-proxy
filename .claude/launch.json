@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "agent-proxy",
+      "runtimeExecutable": "./agent-proxy.exe",
+      "runtimeArgs": ["http", "--listen", "7701", "--target", "http://localhost:8080", "--require-approval"],
+      "port": 7700
+    }
+  ]
+}
